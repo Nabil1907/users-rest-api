@@ -1,26 +1,40 @@
 const { PrismaClient } = require('@prisma/client');
+const { validationResult } = require('express-validator');
+const { memoize } = require('../util/memoization');
+
 const prisma = new PrismaClient();
 
 const createUser = async (req, res, next) => {
     try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
         const { name, email, age, country, mobile } = req.body;
         const newUser = await prisma.user.create({
             data: { name, email, age, country, mobile },
         });
-        res.json(newUser);
+        res.status(201).json(newUser);
     } catch (error) {
         next(error);
     }
 };
 
-const getUsers = async (req, res, next) => {
+const getAllUsers = async (req, res, next) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const pageSize = parseInt(req.query.pageSize) || 10;
+        const { page = 1, pageSize = 10 } = req.query;
+        const parsedPage = parseInt(page);
+        const parsedPageSize = parseInt(pageSize);
+
+        if (isNaN(parsedPage) || isNaN(parsedPageSize) || parsedPage < 1 || parsedPageSize < 1) {
+            return res.status(400).json({ error: 'Invalid page or pageSize values' });
+        }
+
+        const skip = (parsedPage - 1) * parsedPageSize;
 
         const users = await prisma.user.findMany({
-            skip: (page - 1) * pageSize,
-            take: pageSize,
+            skip,
+            take: parsedPageSize,
         });
 
         res.json(users);
@@ -29,8 +43,16 @@ const getUsers = async (req, res, next) => {
     }
 };
 
+const memoizedGetAllUsers = memoize(async (...args) => {
+    return getAllUsers(...args);
+});
+
 const updateUser = async (req, res, next) => {
     try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
         const userId = parseInt(req.params.id);
         const { name, email, age, country, mobile } = req.body;
         const updatedUser = await prisma.user.update({
@@ -46,10 +68,14 @@ const updateUser = async (req, res, next) => {
 const deleteUser = async (req, res, next) => {
     try {
         const userId = parseInt(req.params.id);
+        const existingUser = await prisma.user.findUnique({ where: { id: userId } });
+        if (!existingUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
         await prisma.user.delete({
             where: { id: userId },
         });
-        res.send('User deleted successfully');
+        res.status(204).send('User deleted successfully');
     } catch (error) {
         next(error);
     }
@@ -57,7 +83,7 @@ const deleteUser = async (req, res, next) => {
 
 module.exports = {
     createUser,
-    getUsers,
+    getAllUsers: memoizedGetAllUsers,
     updateUser,
     deleteUser,
 };
